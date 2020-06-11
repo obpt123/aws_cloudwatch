@@ -15,6 +15,46 @@ Resources:
               console.log(`received:${event.type},${event.message}`)
               return event.type;
           }
+  topic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: "pengbo.yang@thoughtworks.com"
+          Protocol: email
+  logMetricsFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+        FilterPattern: 'error'
+        LogGroupName: !Ref logGroup
+        MetricTransformations:
+            - MetricValue: "1"
+              MetricNamespace: ypbmetrics
+              MetricName: errorlog
+  logGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: logger
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Join:
+        - ''
+        - - "/aws/lambda/"
+          - Ref: logger
+      RetentionInDays: 1
+  alarmLog:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: error in log
+      MetricName: errorlog
+      Namespace: ypbmetrics
+      Statistic: Sum
+      Period: "60"
+      EvaluationPeriods: "1"
+      Threshold: "50"
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - Ref: topic
+      TreatMissingData: notBreaching
   metric:
     Type: AWS::Lambda::Function
     Properties:
@@ -60,46 +100,6 @@ Resources:
               await putMetricData("msgLength",event.message.length)
               return event.type;
           }
-  topic:
-    Type: AWS::SNS::Topic
-    Properties:
-      Subscription:
-        - Endpoint: "pengbo.yang@thoughtworks.com"
-          Protocol: email
-  logMetricsFilter:
-    Type: AWS::Logs::MetricFilter
-    Properties:
-        FilterPattern: 'error'
-        LogGroupName: !Ref logGroup
-        MetricTransformations:
-            - MetricValue: "1"
-              MetricNamespace: ypbmetrics
-              MetricName: errorlog
-  logGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: logger
-    DeletionPolicy: Retain
-    Properties:
-      LogGroupName:
-        Fn::Join:
-        - ''
-        - - "/aws/lambda/"
-          - Ref: logger
-      RetentionInDays: 1
-  alarmLog:
-    Type: "AWS::CloudWatch::Alarm"
-    Properties:
-      AlarmDescription: error in log
-      MetricName: errorlog
-      Namespace: ypbmetrics
-      Statistic: Sum
-      Period: "60"
-      EvaluationPeriods: "1"
-      Threshold: "50"
-      ComparisonOperator: GreaterThanThreshold
-      AlarmActions:
-        - Ref: topic
-      TreatMissingData: notBreaching
   alarmMetric:
     Type: "AWS::CloudWatch::Alarm"
     Properties:
@@ -117,3 +117,27 @@ Resources:
       AlarmActions:
         - Ref: topic
       TreatMissingData: notBreaching
+
+  triggerLoggerLambda:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Trigger Lambda
+      State: ENABLED
+      ScheduleExpression: rate(1 minute)
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - logger
+              - Arn
+          Input: '{"type":"error","message":"message..."}'
+          Id: cloudwatchRuleInvokeLambda
+  lambdaPermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref logger
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+          - triggerLoggerLambda
+          - Arn
