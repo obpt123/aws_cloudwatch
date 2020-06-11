@@ -1,0 +1,119 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  logger:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: arn:aws:iam::494526681395:role/for-aws-training-2
+      Runtime: nodejs12.x
+      Timeout: 120
+      Code:
+        ZipFile: |
+          var aws = require('aws-sdk')
+          exports.handler = async function(event, context) {
+              console.log(`received:${event.type},${event.message}`)
+              return event.type;
+          }
+  metric:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: arn:aws:iam::494526681395:role/for-aws-training-2
+      Runtime: nodejs12.x
+      Timeout: 120
+      Code:
+        ZipFile: |
+          const aws = require('aws-sdk');
+          let cloudWatch = new aws.CloudWatch();
+
+          function putMetricData(name,value){
+              return new Promise((resolve,reject)=>{
+                  let params={
+                  MetricData:[{
+                      MetricName:name,
+                      Timestamp:new Date(),
+                      Value:value,
+                      Dimensions:[
+                          {
+                              Name:"ClientName",
+                              Value:"ypblambda"
+                          }
+                      ]
+                  }],
+                  Namespace:'ypbmetrics'
+              };
+              cloudWatch.putMetricData(params,(err,data)=>{
+                  if(err){
+                      console.log("Error: sending metrics to cloudWatch");
+                      console.log(err,err.stack);
+                      reject(err.stack);
+                  }else{
+                      console.log("Sending metrics to cloudWatch successfully! ");
+                      console.log(data);
+                      resolve(data);
+                  }
+              });
+              });
+          }
+          exports.handler = async function(event, context) {
+              await putMetricData("msgLength",event.message.length)
+              return event.type;
+          }
+  topic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: "pengbo.yang@thoughtworks.com"
+          Protocol: email
+  logMetricsFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+        FilterPattern: 'error'
+        LogGroupName: !Ref logGroup
+        MetricTransformations:
+            - MetricValue: "1"
+              MetricNamespace: ypbmetrics
+              MetricName: errorlog
+  logGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: logger
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Join:
+        - ''
+        - - "/aws/lambda/"
+          - Ref: logger
+      RetentionInDays: 1
+  alarmLog:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: error in log
+      MetricName: errorlog
+      Namespace: ypbmetrics
+      Statistic: Sum
+      Period: "60"
+      EvaluationPeriods: "1"
+      Threshold: "50"
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - Ref: topic
+      TreatMissingData: notBreaching
+  alarmMetric:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: message length great than 50
+      MetricName: msgLength
+      Namespace: ypbmetrics
+      Statistic: Maximum
+      Period: "10"
+      EvaluationPeriods: "1"
+      Threshold: "50"
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: "ClientName"
+          Value: "ypblambda"
+      AlarmActions:
+        - Ref: topic
+      TreatMissingData: notBreaching
